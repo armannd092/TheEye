@@ -8,40 +8,53 @@ from matplotlib import pyplot as plt
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 config= tf.ConfigProto(log_device_placement=True)
 learning_rate = 0.1
-num_steps = 500
+num_steps = 9000
 batch_size = 10
 display_step = 10
 
-fp = os.path.join('csv', 'DataSet_01.csv')
-data = pd.read_csv(fp, skiprows=[0], usecols=[0, 1, 2, 3], header=None)
+fp = os.path.join('csv', 'DataSet_02.csv')
+data = pd.read_csv(fp, skiprows=[0], usecols=[0, 2, 3, 4], header=None)
+
+def cleaner(data):
+    data = pd.DataFrame.drop(data,columns=[0])
+    indz = []
+    for index,row in data.iterrows():
+        check = 0
+        for i in row:
+            check+=i
+        if check == 0:
+            indz.append(index)
+    data = pd.DataFrame.drop(data,index=indz)
+    return data
+
+data = cleaner(data)
 dataShape = data.shape
 numSmp = round(dataShape[0] * 0.8)
+while numSmp % batch_size != 0:
+    numSmp+=1
+
 remSmp = dataShape[0] - numSmp
 dataToTrain = data.sample(n=numSmp, random_state=35489)
 dataToTest = data.drop(dataToTrain.index)
-dataToTrain_feature = pd.DataFrame.drop(dataToTrain,columns=[0,1])
-dataToTrain_lable = pd.DataFrame.drop(dataToTrain,columns=[0,2,3])
-dataToTest_feature = pd.DataFrame.drop(dataToTest,columns=[0,1])
-dataToTest_lable = pd.DataFrame.drop(dataToTest,columns=[0,2,3])
+
+dataToTrain_feature = pd.DataFrame.drop(dataToTrain,columns=[2])
+dataToTrain_lable = pd.DataFrame.drop(dataToTrain,columns=[3,4])
+
+dataToTest_feature = pd.DataFrame.drop(dataToTest,columns=[2])
+dataToTest_lable = pd.DataFrame.drop(dataToTest,columns=[3,4])
+
 dttn_f_a = np.array(dataToTrain_feature.values,'float32')
 dttn_l_a = np.array(dataToTrain_lable.values,'float32')
+
 dtts_f_a = np.array(dataToTest_feature.values,'float32')
 dtts_l_a = np.array(dataToTest_lable.values,'float32')
 
-datasetToTrain = tf.data.Dataset.from_tensor_slices((dttn_f_a, dttn_l_a))
-datasetToTest = tf.data.Dataset.from_tensor_slices((dtts_f_a, dtts_l_a))
+#print(np.shape(dttn_f_a))
+dataBatch_x = np.vsplit(dttn_f_a,[batch_size])
+dataBatch_y = np.vsplit(dttn_l_a,[batch_size])
 
-datasetToTrain = datasetToTrain.repeat()
-datasetToTrain = datasetToTrain.batch(batch_size)
-datasetToTrain = datasetToTrain.prefetch(batch_size)
 
-datasetToTest = datasetToTest.repeat()
-datasetToTest = datasetToTest.batch(batch_size)
-datasetToTest = datasetToTest.prefetch(batch_size)
 
-iterator = datasetToTrain.make_one_shot_iterator()
-it_int = iterator.make_initializer(datasetToTrain)
-val_iterator = datasetToTest.make_initializable_iterator()
 #print(dataToTrain_lable.shape)
 #make the neural network model
 graph1 = tf.Graph()
@@ -52,7 +65,6 @@ architecture = [num_input,3,num_output]
 
 def weights(architecture):
     weight = []
-    #architecture.remove(architecture[0])
     for i in range(len(architecture)-1):
         wl = tf.Variable(tf.random_normal([architecture[i], architecture[i+1]]))
         weight.append(wl)
@@ -77,7 +89,7 @@ with graph1.as_default():
     Y = tf.placeholder("float32", [None, num_output],name='Y')
     logistic = neuralNet(X, architecture, weights(architecture), baieses(architecture))
     prediction = tf.nn.sigmoid(logistic)
-    loss_op = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logistic, labels=Y))
+    loss_op = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logistic, labels=Y))
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
     trainOp = optimizer.minimize(loss_op)
     correct_pred = tf.equal(tf.argmax(prediction, 1), tf.argmax(Y, 1))
@@ -86,15 +98,13 @@ with graph1.as_default():
 
 with tf.Session(graph=graph1,config=config) as sess:
     sess.run(init)
-    sess.run(it_int)
-    batch_x, batch_y = iterator.get_next()
-    for step in range(1, num_steps + 1):
-        sess.run(trainOp,{'X:0':batch_x,'Y:0':batch_y})
-
-        if step % display_step == 0 or step == 1:
-
-            loss, acc = sess.run([loss_op, accuracy],{'X:0':batch_x,'Y:0':batch_y})
-            print("Step " + str(step) + ", Minibatch Loss= " + \
-                  "{:.4f}".format(loss) + ", Training Accuracy= " + \
-                  "{:.3f}".format(acc))
+    #sess.run(it_int)
+    for batch_x, batch_y in zip(dataBatch_x, dataBatch_y):
+        for step in range(1, num_steps + 1):
+            sess.run(trainOp,{X:batch_x,Y:batch_y})
+            if (step+1) % display_step == 0:
+                loss, acc = sess.run([loss_op, accuracy],{X:batch_x,Y:batch_y})
+                print("Step " , str(step+1) , ", Minibatch Loss= " ,
+                      "{:.4f}".format(loss) , ", Training Accuracy= " ,
+                      "{:.3f}".format(acc))
     sess.close()
